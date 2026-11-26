@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.bin/
+settings.json
+.git/
+.env
