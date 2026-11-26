@@ -139,15 +139,43 @@ def _normalize_url(url: str) -> str:
     return url
 
 
+def _fetch_through_cloudscraper(url: str) -> str | None:
+    """Fallback: solve Cloudflare's JS challenge with cloudscraper.
+    Slower than curl-cffi but survives tougher bot rules."""
+    try:
+        import cloudscraper
+    except ImportError:
+        return None
+    try:
+        s = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False})
+        r = s.get(url, timeout=90)
+        if "__NEXT_DATA__" in (r.text or ""):
+            return r.text
+    except Exception:
+        pass
+    return None
+
+
+def _looks_like_menu_html(text: str) -> bool:
+    return bool(text) and ('id="__NEXT_DATA__"' in text or "__NEXT_DATA__" in text)
+
+
 def fetch_menu(url: str) -> dict:
     """Fetch a HungerStation restaurant page and return a structured menu."""
     url = _normalize_url(url)
     r = cf.get(url, impersonate="chrome", timeout=90)
     if r.status_code in (404, 410):
         raise RuntimeError("الصفحة دي مش موجودة — المطعم ممكن يكون اتقفل من HungerStation أو اللينك غلط")
-    if r.status_code != 200:
-        raise RuntimeError(f"الموقع رجّع كود {r.status_code} — جرب تاني بعد شوية")
-    text = r.text
+    text = r.text if r.status_code == 200 else ""
+    if r.status_code != 200 or not _looks_like_menu_html(text):
+        # Cloud provider IPs are often blocked by HungerStation's bot protection;
+        # retry with a full Cloudflare challenge solver before giving up.
+        alt = _fetch_through_cloudscraper(url)
+        if _looks_like_menu_html(alt or ""):
+            text = alt
+        elif r.status_code != 200:
+            raise RuntimeError(f"الموقع رجّع كود {r.status_code} — جرب تاني بعد شوية")
     low = text.lower()
     if "just a moment" in low or "attention required" in low:
         raise RuntimeError("الصفحة محمية بحماية Cloudflare — استنى دقيقة وجرب تاني")
